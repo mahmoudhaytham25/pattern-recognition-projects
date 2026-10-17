@@ -22,4 +22,9 @@ keep their executed outputs from the original training runs.
 
 ## Credits
 
-Project 01 was a team effort — see its README for the full list.
+Both projects were a team effort at Alexandria University (March–May 2025):
+
+- **Judy Nabil**
+- **Amr Abdelaziz**
+- **Ahmed Hany**
+- **Mahmoud Haytham**

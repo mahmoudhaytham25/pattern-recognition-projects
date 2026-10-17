@@ -73,5 +73,10 @@ Or open the notebooks:
 - The feed-forward model trades a bit of fidelity for speed — one forward
   pass vs. hundreds of optimization steps per image — and `t` gives
   continuous control over stylization strength.
-- ViT encoder path exists as an architecture experiment (bonus); the CNN
-  variant was the primary submission.
+- ViT encoder path exists as an architecture experiment; the CNN variant is
+  the primary model.
+
+## Credits
+
+Team project (Pattern Recognition, Alexandria University, May 2025):
+Judy Nabil, Amr Abdelaziz, Ahmed Hany, Mahmoud Haytham.
