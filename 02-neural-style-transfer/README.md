@@ -79,4 +79,6 @@ Or open the notebooks:
 ## Credits
 
 Team project (Pattern Recognition, Alexandria University, May 2025):
-Judy Nabil, Amr Abdelaziz, Ahmed Hany, Mahmoud Haytham.
+[Judy Nabil](https://github.com/judy2511), Amr Abdelaziz,
+[Ahmed Hany](https://github.com/ahanyahmed),
+[Mahmoud Haytham](https://github.com/mahmoudhaytham25).

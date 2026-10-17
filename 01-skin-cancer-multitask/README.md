@@ -56,4 +56,6 @@ jupyter notebook skin_cancer_multitask.ipynb
 ## Credits
 
 Team project (Pattern Recognition, Alexandria University, March 2025):
-Judy Nabil, Amr Abdelaziz, Ahmed Hany, Mahmoud Haytham.
+[Judy Nabil](https://github.com/judy2511), Amr Abdelaziz,
+[Ahmed Hany](https://github.com/ahanyahmed),
+[Mahmoud Haytham](https://github.com/mahmoudhaytham25).
