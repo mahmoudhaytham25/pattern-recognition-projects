@@ -1,0 +1,22 @@
+# Core
+torch>=2.1
+torchvision>=0.16
+numpy>=1.24
+pandas>=2.0
+matplotlib>=3.7
+seaborn>=0.12
+opencv-python>=4.8
+Pillow>=10.0
+scikit-learn>=1.3
+
+# Notebook runtime
+jupyter>=1.0
+
+# 02 — ViT encoder variant (style_transfer_vit.ipynb / VitStyleNet)
+timm>=0.9
+
+# 02 — optional serving sketch in style_transfer.py
+# flask>=3.0
+
+# 02 — TF per-image-optimization notebook only
+# tensorflow>=2.15

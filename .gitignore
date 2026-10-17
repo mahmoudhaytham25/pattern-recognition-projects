@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# OS
+.DS_Store
+
+# Datasets (downloaded from Kaggle — see project READMEs)
+data/
+
+# Model checkpoints & generated outputs
+*.pth
+*.pt
+outputs/
+
+# Local-only interview prep notes — never commit
+INTERVIEW_CHEATSHEET.md
