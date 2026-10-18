@@ -34,6 +34,6 @@ keep their executed outputs from the original training runs.
 Both projects were a team effort at Alexandria University (March–May 2025):
 
 - **[Judy Nabil](https://github.com/judy2511)**
-- **Amr Abdelaziz**
+- **[Amr Abdelaziz](https://github.com/amr-abdelaziz1911)**
 - **[Ahmed Hany](https://github.com/ahanyahmed)**
 - **[Mahmoud Haytham](https://github.com/mahmoudhaytham25)**

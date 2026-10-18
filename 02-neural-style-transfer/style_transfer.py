@@ -24,6 +24,8 @@ np.random.seed(42)
 RAW_CONTENT = os.environ.get('CONTENT_DIR', 'data/image-classification/images/images')
 RAW_STYLE = os.environ.get('STYLE_DIR', 'data/wikiart')
 WORK_BASE = os.environ.get('WORK_DIR', 'outputs')
+# Style weight lambda (paper uses ~10 with multi-layer mean/std losses)
+STYLE_WEIGHT = float(os.environ.get('STYLE_WEIGHT', 10.0))
 DATA_BASE = os.path.join(WORK_BASE, 'data')
 
 def stratified_sample_split(raw_dir, out_base, total,
@@ -87,9 +89,9 @@ class StyleDS(Dataset):
             
         return tf(c), tf(s), t
 
-train_dl = DataLoader(StyleDS(DATA_BASE, 'train'), batch_size=8, shuffle=True)
-val_dl = DataLoader(StyleDS(DATA_BASE, 'val'), batch_size=8)
-test_dl = DataLoader(StyleDS(DATA_BASE, 'test'), batch_size=4)
+train_dl = DataLoader(StyleDS(DATA_BASE, 'train'), batch_size=8, shuffle=True, num_workers=2)
+val_dl = DataLoader(StyleDS(DATA_BASE, 'val'), batch_size=8, num_workers=2)
+test_dl = DataLoader(StyleDS(DATA_BASE, 'test'), batch_size=4, num_workers=2)
 
 def adain(content_feat: Tensor, style_feat: Tensor, eps: float = 1e-5) -> Tensor:
     c_mean = content_feat.mean(dim=[2, 3], keepdim=True)
@@ -130,7 +132,7 @@ class StyleNet(nn.Module):
             
         tf_ = adain(cf, sf)
         feat = t.view(-1, 1, 1, 1) * tf_ + (1-t).view(-1, 1, 1, 1) * cf
-        return self.dec(feat)
+        return self.dec(feat), feat
 
 class VitStyleNet(nn.Module):
     def __init__(self):
@@ -181,41 +183,45 @@ class VitStyleNet(nn.Module):
         feat = t.view(-1, 1, 1, 1) * tf_ + (1-t).view(-1, 1, 1, 1) * c_feat
         
         # Decode to image
-        return self.decoder(feat)
+        return self.decoder(feat), feat
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = StyleNet().to(device)
 vit_model = VitStyleNet().to(device)
 
-def gram(x: Tensor) -> Tensor:
-    b, c, h, w = x.size()
-    f = x.view(b, c, h*w)
-    g = torch.bmm(f, f.transpose(1, 2))
-    return g / (c * h * w)
+# Multi-layer VGG feature taps (relu1_1, relu2_1, relu3_1, relu4_1)
+VGG_TAP_LAYERS = (1, 6, 11, 20)
 
-def content_loss(output: Tensor, target: Tensor) -> Tensor:
-    return F.mse_loss(output, target)
+def vgg_taps(x: Tensor, vgg: nn.Module):
+    taps = []
+    for i, layer in enumerate(vgg):
+        x = layer(x)
+        if i in VGG_TAP_LAYERS:
+            taps.append(x)
+    return taps
 
-def style_loss(output: Tensor, target: Tensor) -> Tensor:
-    g_output = gram(output)
-    g_target = gram(target)
-    return F.mse_loss(g_output, g_target)
+def style_mean_std_loss(o_taps, s_taps) -> Tensor:
+    """Paper's style loss: match channel mean AND std at each tapped layer."""
+    l = 0.0
+    for of, sf in zip(o_taps, s_taps):
+        l += F.mse_loss(of.mean(dim=[2, 3]), sf.mean(dim=[2, 3]))
+        l += F.mse_loss(of.std(dim=[2, 3]),  sf.std(dim=[2, 3]))
+    return l
 
-def total_loss(output: Tensor, content: Tensor, style: Tensor, alpha=1.0, beta=1.0) -> Tensor:
+def total_loss(output: Tensor, feat_mix: Tensor, style: Tensor, vgg, style_weight=STYLE_WEIGHT):
+    """Content target is the AdaIN-mixed bottleneck feature (paper), not raw content."""
     o = F.interpolate(output, size=(256, 256), mode='bilinear', align_corners=False)
-    c = F.interpolate(content, size=(256, 256), mode='bilinear', align_corners=False)
     s = F.interpolate(style, size=(256, 256), mode='bilinear', align_corners=False)
-    
-    vgg = models.vgg19(pretrained=True).features[:21].to(device).eval()
-    
-    o_features = vgg(o)
-    c_features = vgg(c)
-    s_features = vgg(s)
-    
-    c_loss = content_loss(o_features, c_features)
-    s_loss = style_loss(o_features, s_features)
-    
-    return alpha * c_loss + beta * s_loss
+
+    o_taps = vgg_taps(o, vgg)
+    s_taps = vgg_taps(s, vgg)
+
+    c_loss = F.mse_loss(
+        F.interpolate(o_taps[3], size=feat_mix.shape[2:], mode='bilinear', align_corners=False),
+        feat_mix)
+    s_loss = style_mean_std_loss(o_taps, s_taps)
+
+    return c_loss + style_weight * s_loss, c_loss, s_loss
 
 def train_model(model, train_loader, val_loader, num_epochs=10, lr=1e-4, patience=5):
     optimizer = optim.Adam(model.dec.parameters(), lr=lr)
@@ -229,30 +235,15 @@ def train_model(model, train_loader, val_loader, num_epochs=10, lr=1e-4, patienc
         model.train()
         train_loss = 0.0
         
-        for c, s, t in train_loader:
-            c, s, t = c.to(device), s.to(device), t.to(device)
-            
+        for c, s, _ in train_loader:
+            c, s = c.to(device), s.to(device)
+            # Train at full stylization (paper); t stays a test-time dial
+            t = torch.ones(c.size(0), 1, device=device)
+
             optimizer.zero_grad()
-            output = model(c, s, t)
-            
-            # Compute VGG features
-            c_resize = F.interpolate(c, size=(256, 256), mode='bilinear', align_corners=False)
-            s_resize = F.interpolate(s, size=(256, 256), mode='bilinear', align_corners=False)
-            o_resize = F.interpolate(output, size=(256, 256), mode='bilinear', align_corners=False)
-            
-            c_feat = vgg_loss(c_resize)
-            s_feat = vgg_loss(s_resize)
-            o_feat = vgg_loss(o_resize)
-            
-            # Content loss
-            c_loss = F.mse_loss(o_feat, c_feat)
-            
-            # Style loss
-            s_loss = F.mse_loss(gram(o_feat), gram(s_feat))
-            
-            # Total loss with weighting based on threshold
-            loss = c_loss + s_loss
-            
+            output, feat_mix = model(c, s, t)
+            loss, c_loss, s_loss = total_loss(output, feat_mix, s, vgg_loss)
+
             loss.backward()
             optimizer.step()
             
@@ -265,23 +256,11 @@ def train_model(model, train_loader, val_loader, num_epochs=10, lr=1e-4, patienc
         val_loss = 0.0
         
         with torch.no_grad():
-            for c, s, t in val_loader:
-                c, s, t = c.to(device), s.to(device), t.to(device)
-                output = model(c, s, t)
-                
-                # Same loss computation as training
-                c_resize = F.interpolate(c, size=(256, 256), mode='bilinear', align_corners=False)
-                s_resize = F.interpolate(s, size=(256, 256), mode='bilinear', align_corners=False)
-                o_resize = F.interpolate(output, size=(256, 256), mode='bilinear', align_corners=False)
-                
-                c_feat = vgg_loss(c_resize)
-                s_feat = vgg_loss(s_resize)
-                o_feat = vgg_loss(o_resize)
-                
-                c_loss = F.mse_loss(o_feat, c_feat)
-                s_loss = F.mse_loss(gram(o_feat), gram(s_feat))
-                
-                loss = c_loss + s_loss
+            for c, s, _ in val_loader:
+                c, s = c.to(device), s.to(device)
+                t = torch.ones(c.size(0), 1, device=device)
+                output, feat_mix = model(c, s, t)
+                loss, _, _ = total_loss(output, feat_mix, s, vgg_loss)
                 val_loss += loss.item()
         
         val_loss /= len(val_loader)
@@ -302,7 +281,7 @@ def train_model(model, train_loader, val_loader, num_epochs=10, lr=1e-4, patienc
     
     return history
 
-def evaluate_model(model, dataloader, thresholds=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]):
+def evaluate_model(model, dataloader, thresholds=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0], max_batches=25):
     model.eval()
     results = []
     vgg_loss_model = models.vgg19(pretrained=True).features[:21].to(device).eval()
@@ -312,32 +291,21 @@ def evaluate_model(model, dataloader, thresholds=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
             content_losses = []
             style_losses = []
             
-            for c, s, _ in dataloader:
+            for bi, (c, s, _) in enumerate(dataloader):
+                if bi >= max_batches:
+                    break
                 c, s = c.to(device), s.to(device)
                 t_tensor = torch.full((c.size(0), 1), t_val, device=device)
-                output = model(c, s, t_tensor)
-                
-                # Compute features for loss
-                c_resize = F.interpolate(c, size=(256, 256), mode='bilinear', align_corners=False)
-                s_resize = F.interpolate(s, size=(256, 256), mode='bilinear', align_corners=False)
-                o_resize = F.interpolate(output, size=(256, 256), mode='bilinear', align_corners=False)
-                
-                c_feat = vgg_loss_model(c_resize)
-                s_feat = vgg_loss_model(s_resize)
-                o_feat = vgg_loss_model(o_resize)
-                
-                # Content loss
-                c_loss = F.mse_loss(o_feat, c_feat).item()
-                
-                # Style loss
-                s_loss = F.mse_loss(gram(o_feat), gram(s_feat)).item()
-                
-                content_losses.append(c_loss)
-                style_losses.append(s_loss)
+                output, feat_mix = model(c, s, t_tensor)
+
+                _, c_loss, s_loss = total_loss(output, feat_mix, s, vgg_loss_model)
+
+                content_losses.append(c_loss.item())
+                style_losses.append(s_loss.item())
             
             avg_content_loss = sum(content_losses) / len(content_losses)
             avg_style_loss = sum(style_losses) / len(style_losses)
-            total_loss = avg_content_loss + avg_style_loss
+            total_loss = avg_content_loss + STYLE_WEIGHT * avg_style_loss
             
             results.append({
                 'threshold': t_val,
@@ -361,7 +329,7 @@ def generate_examples(model, dataloader, threshold=0.5, num_examples=10):
                 
             c, s = c.to(device), s.to(device)
             t_tensor = torch.full((c.size(0), 1), threshold, device=device)
-            output = model(c, s, t_tensor)
+            output, _ = model(c, s, t_tensor)
             
             for i in range(c.size(0)):
                 if len(content_images) >= num_examples:
@@ -451,7 +419,7 @@ def create_web_app(model):
         threshold_tensor = torch.tensor([threshold]).view(1, 1).to(device)
         
         with torch.no_grad():
-            output = model(content_tensor, style_tensor, threshold_tensor)
+            output, _ = model(content_tensor, style_tensor, threshold_tensor)
         
         output_img = to_image(output[0].cpu())
         output_img = (output_img * 255).astype(np.uint8)

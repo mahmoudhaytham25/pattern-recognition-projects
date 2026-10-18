@@ -28,17 +28,37 @@ style ────► VGG-19 enc ──► sf ─┘
 - **Training data** — 7k content images (Kaggle `image-classification`
   dataset) + 3k style images (WikiArt), stratified-sampled and split
   80/10/10.
-- **Loss** — perceptual losses on VGG-19 features: content loss = MSE on
-  feature maps; style loss = MSE on Gram matrices.
-- **Threshold conditioning** — `t` is sampled randomly per training pair
-  (`threshold_mode='random'`), teaching the decoder the full interpolation
-  curve; a post-training sweep over `t ∈ {0.0, …, 1.0}` picks the best
-  trade-off on the test set.
+- **Loss** — the AdaIN paper's objective: content loss = MSE between the
+  output's VGG relu4_1 features and the AdaIN-*mixed* target feature (not the
+  raw content features, which would penalize stylization); style loss = MSE
+  on channel-wise mean + std at four VGG taps (relu1_1–relu4_1). Total =
+  content + `λ·style`, `λ = STYLE_WEIGHT` (default 10).
+- **Threshold conditioning** — training runs at full stylization (`t = 1`);
+  `t` is an inference-time dial only. A post-training sweep over
+  `t ∈ {0.0, …, 1.0}` picks the best content/style trade-off on the val set.
 - **Early stopping + checkpointing** — best weights saved by val loss;
   `torch.jit` traced export for deployment.
 - **Serving sketch** — `create_web_app()` in `style_transfer.py` wraps the
   model in a Flask `/transfer` endpoint (content + style upload → base64
   stylized image).
+
+## Results (Kaggle T4, 20 epochs)
+
+Trained on the full 5.6k/700/700 content + 2.4k/295/322 style splits:
+
+| | final epoch | best |
+|---|---|---|
+| train loss | 24.06 | — |
+| val loss | 31.18 | — |
+| best `t` on val | — | **1.0** (val 29.16) |
+
+![stylization grid](examples_grid.jpg)
+
+`Content | Style | t=0.5 | t=0.75 | t=1.0`. The dial works as intended:
+`t≈0.5` keeps content structure with a clear style palette shift; `t=1.0`
+applies the strongest style statistics and can over-stylize low-texture
+styles — the known AdaIN trade-off between content fidelity and style
+strength.
 
 ## ViT variant
 
@@ -76,9 +96,20 @@ Or open the notebooks:
 - ViT encoder path exists as an architecture experiment; the CNN variant is
   the primary model.
 
+## References
+
+- X. Huang & S. Belongie, *"Arbitrary Style Transfer in Real-time with
+  Adaptive Instance Normalization"*, ICCV 2017 — the feed-forward `StyleNet`
+  (VGG-19 encoder → AdaIN → decoder, `t` stylization dial, multi-layer
+  mean/std style losses).
+- L. Gatys, A. Ecker & M. Bethge, *"Image Style Transfer Using Convolutional
+  Neural Networks"*, CVPR 2016 — the per-image optimization baseline in
+  `style_transfer_tf.ipynb`.
+
 ## Credits
 
 Team project (Pattern Recognition, Alexandria University, May 2025):
-[Judy Nabil](https://github.com/judy2511), Amr Abdelaziz,
+[Judy Nabil](https://github.com/judy2511),
+[Amr Abdelaziz](https://github.com/amr-abdelaziz1911),
 [Ahmed Hany](https://github.com/ahanyahmed),
 [Mahmoud Haytham](https://github.com/mahmoudhaytham25).
